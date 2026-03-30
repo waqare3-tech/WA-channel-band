@@ -4,12 +4,13 @@ import random
 import time
 import json
 import hashlib
-import urllib.parse
+import ssl
+import socket
 from datetime import datetime
 import os
 import sys
 
-# Color codes for Termux
+# Termux colors
 GREEN = '\033[92m'
 RED = '\033[91m'
 YELLOW = '\033[93m'
@@ -18,229 +19,224 @@ CYAN = '\033[96m'
 WHITE = '\033[97m'
 RESET = '\033[0m'
 
-class WhatsAppChannelReporter:
+class FixedChannelReporter:
     def __init__(self):
-        self.session = requests.Session()
+        self.session = self.create_session()
         self.success = 0
         self.failed = 0
+        self.rate_limited = False
         
-    def generate_device_id(self):
-        """Generate realistic mobile device fingerprint"""
-        devices = [
-            "SM-G998B", "iPhone14,2", "Pixel 6 Pro", "SM-F926B", 
-            "Redmi Note 11", "OnePlus 9 Pro", "Xiaomi 12", "SM-A528B"
-        ]
-        android_versions = ["13", "12", "11", "14"]
-        ios_versions = ["17.2", "16.5", "15.7"]
+    def create_session(self):
+        """Create session with proper SSL handling for Termux"""
+        session = requests.Session()
         
-        device = random.choice(devices)
-        if "iPhone" in device:
-            os_ver = random.choice(ios_versions)
-            user_agent = f"Mozilla/5.0 (iPhone; CPU iPhone OS {os_ver.replace('.', '_')} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{os_ver} Mobile/15E148 Safari/604.1"
-        else:
-            os_ver = random.choice(android_versions)
-            user_agent = f"Mozilla/5.0 (Linux; Android {os_ver}; {device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(100, 120)}.0.{random.randint(1000, 9999)}.{random.randint(10, 99)} Mobile Safari/537.36"
+        # Bypass SSL verification issues in Termux
+        session.verify = False
         
-        return user_agent
-    
-    def generate_session_id(self):
-        """Create unique session identifier"""
-        timestamp = int(time.time() * 1000)
-        random_bytes = os.urandom(16).hex()
-        return f"wa_{timestamp}_{random_bytes[:8]}"
-    
-    def extract_channel_id(self, channel_link):
-        """Extract channel ID from WhatsApp channel link"""
-        # WhatsApp channel formats:
-        # https://whatsapp.com/channel/xxxxxxxxxx
-        # https://wa.me/channel/xxxxxxxxxx
-        # https://chat.whatsapp.com/xxxxxxxxxx (old format)
-        
-        channel_id = None
-        
-        if "whatsapp.com/channel/" in channel_link:
-            channel_id = channel_link.split("whatsapp.com/channel/")[-1].split("?")[0].split("/")[0]
-        elif "wa.me/channel/" in channel_link:
-            channel_id = channel_link.split("wa.me/channel/")[-1].split("?")[0].split("/")[0]
-        elif "chat.whatsapp.com/" in channel_link:
-            channel_id = channel_link.split("chat.whatsapp.com/")[-1].split("?")[0].split("/")[0]
-        else:
-            # Assume direct ID if no pattern matches
-            channel_id = channel_link.strip("/")
-            
-        return channel_id.strip()
-    
-    def submit_report(self, channel_id, report_type="spam"):
-        """Submit abuse report to WhatsApp channel"""
-        
-        report_categories = {
-            "spam": 1,
-            "harassment": 2, 
-            "illegal_content": 3,
-            "impersonation": 4,
-            "violence": 5,
-            "hate_speech": 6,
-            "misinformation": 7,
-            "scam": 8
-        }
-        
-        category_code = report_categories.get(report_type, 1)
-        
-        # Multiple endpoints to maximize success
-        endpoints = [
-            "https://faq.whatsapp.com/contact/channel-abuse",
-            "https://www.whatsapp.com/legal/channel-abuse",
-            "https://web.whatsapp.com/channels/report"
-        ]
-        
-        # Rotate user agent per request
-        self.session.headers.update({
-            'User-Agent': self.generate_device_id(),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': random.choice(['en-US,en;q=0.9', 'id-ID,id;q=0.8,en;q=0.7', 'ar-SA,ar;q=0.9']),
+        # Set realistic headers
+        session.headers.update({
+            'User-Agent': self.random_user_agent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
             'Cache-Control': 'max-age=0',
-            'Origin': 'https://www.whatsapp.com',
-            'Referer': 'https://www.whatsapp.com/'
+            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+            'Sec-Ch-Ua-Mobile': '?1',
+            'Sec-Ch-Ua-Platform': '"Android"',
         })
         
-        # Report payload variations
-        report_texts = [
-            "This channel is violating WhatsApp's Terms of Service by sending spam and unsolicited messages.",
-            "Channel engaged in harassment and abuse of community guidelines.",
-            "This channel is distributing prohibited content in violation of WhatsApp policies.",
-            "Violation of channel content policies - repeated offenses.",
-            "Channel impersonating official organization with malicious intent."
+        return session
+    
+    def random_user_agent(self):
+        """Generate fresh user agent each request"""
+        devices = [
+            "SM-G998B", "iPhone14,2", "Pixel 6 Pro", "SM-F926B", 
+            "Redmi Note 11", "OnePlus 9 Pro", "SM-A528B", "Xiaomi 12"
+        ]
+        device = random.choice(devices)
+        
+        if "iPhone" in device:
+            return f"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1"
+        else:
+            android_ver = random.choice(["13", "12", "14"])
+            chrome_ver = random.randint(110, 121)
+            return f"Mozilla/5.0 (Linux; Android {android_ver}; {device}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver}.0.{random.randint(1000, 9999)}.{random.randint(10, 99)} Mobile Safari/537.36"
+    
+    def extract_channel_id(self, channel_link):
+        """Extract channel ID from any format"""
+        channel_link = channel_link.strip()
+        
+        patterns = [
+            "whatsapp.com/channel/",
+            "wa.me/channel/",
+            "chat.whatsapp.com/"
         ]
         
-        payload = {
-            'channel_id': channel_id,
-            'category': category_code,
-            'description': random.choice(report_texts),
-            'reporter_name': f"User_{random.randint(1000, 9999)}",
-            'reporter_email': f"user{random.randint(100000, 999999)}@temp-mail.org",
-            'timestamp': int(time.time()),
-            'client_id': self.generate_session_id(),
-            'report_hash': hashlib.md5(f"{channel_id}{time.time()}{random.random()}".encode()).hexdigest()
-        }
+        for pattern in patterns:
+            if pattern in channel_link:
+                channel_id = channel_link.split(pattern)[-1].split("?")[0].split("/")[0]
+                return channel_id.strip()
         
-        # Try each endpoint
-        for endpoint in endpoints:
+        # If no pattern matches, assume direct ID
+        return channel_link
+    
+    def test_connection(self):
+        """Test if internet connection works"""
+        try:
+            self.session.get("https://www.google.com", timeout=5)
+            return True
+        except:
+            return False
+    
+    def submit_report(self, channel_id):
+        """Submit report with multiple fallback methods"""
+        
+        if self.rate_limited:
+            print(f"{YELLOW}  → Rate limited, cooling down...{RESET}")
+            time.sleep(120)
+            self.rate_limited = False
+            self.session = self.create_session()
+        
+        # Multiple endpoints to try
+        endpoints = [
+            ("https://faq.whatsapp.com/contact/channel-abuse", "form"),
+            ("https://www.whatsapp.com/contact/channel-abuse", "form"),
+            ("https://web.whatsapp.com/channels/abuse", "json"),
+        ]
+        
+        report_texts = [
+            "Spam channel - sending unsolicited promotional content",
+            "Harassment and abusive content in this channel",
+            "Violation of WhatsApp channel policies - prohibited content",
+            "Channel impersonating official organization",
+            "Distributing harmful/misleading information"
+        ]
+        
+        for endpoint, method in endpoints:
             try:
-                if "faq.whatsapp.com" in endpoint:
-                    response = self.session.post(endpoint, data=payload, timeout=10)
-                elif "whatsapp.com/legal" in endpoint:
-                    response = self.session.post(endpoint, json=payload, timeout=10)
-                else:
-                    response = self.session.post(endpoint, params=payload, timeout=10)
+                payload = {
+                    'channel': channel_id,
+                    'report_type': random.randint(1, 8),
+                    'description': random.choice(report_texts),
+                    'timestamp': int(time.time()),
+                    'session_id': hashlib.md5(os.urandom(16)).hexdigest()[:16]
+                }
                 
-                if response.status_code in [200, 201, 202, 204]:
-                    self.success += 1
+                if method == "form":
+                    response = self.session.post(endpoint, data=payload, timeout=15)
+                else:
+                    response = self.session.post(endpoint, json=payload, timeout=15)
+                
+                if response.status_code == 200:
                     return True
+                elif response.status_code == 429:
+                    self.rate_limited = True
+                    return False
+                elif response.status_code in [403, 404]:
+                    continue
                     
-            except Exception as e:
+            except requests.exceptions.Timeout:
+                continue
+            except requests.exceptions.ConnectionError:
+                continue
+            except Exception:
                 continue
         
-        self.failed += 1
         return False
     
-    def bulk_report(self, channel_id, count, delay_min=2, delay_max=5):
-        """Send multiple reports with randomized delays"""
+    def bulk_report(self, channel_id, count):
+        """Send reports with adaptive delays"""
         
-        print(f"{CYAN}[*] Target Channel ID: {channel_id}{RESET}")
-        print(f"{CYAN}[*] Total Reports: {count}{RESET}")
-        print(f"{CYAN}[*] Delay Range: {delay_min}-{delay_max} seconds{RESET}")
-        print(f"{BLUE}[*] Starting attack...{RESET}\n")
+        print(f"\n{CYAN}╔════════════════════════════════════════╗{RESET}")
+        print(f"{CYAN}║     CHANNEL REPORTING ACTIVE           ║{RESET}")
+        print(f"{CYAN}╚════════════════════════════════════════╝{RESET}")
+        print(f"{WHITE}Target: {YELLOW}{channel_id}{RESET}")
+        print(f"{WHITE}Reports: {YELLOW}{count}{RESET}\n")
         
-        report_types = ["spam", "harassment", "illegal_content", "impersonation", "violence", "hate_speech", "misinformation", "scam"]
+        # Test connection first
+        print(f"{BLUE}[*] Testing connection...{RESET}", end=" ")
+        if self.test_connection():
+            print(f"{GREEN}OK{RESET}")
+        else:
+            print(f"{RED}FAILED - Check internet{RESET}")
+            return
         
         for i in range(count):
-            report_type = random.choice(report_types)
+            print(f"{WHITE}[{i+1}/{count}] Sending report{RESET}", end=" ")
             
-            print(f"{WHITE}[{i+1}/{count}] Sending report type: {YELLOW}{report_type}{RESET}", end=" ")
-            
-            if self.submit_report(channel_id, report_type):
+            if self.submit_report(channel_id):
+                self.success += 1
                 print(f"{GREEN}✓ SUCCESS{RESET}")
+                delay = random.uniform(3, 8)
             else:
+                self.failed += 1
                 print(f"{RED}✗ FAILED{RESET}")
+                delay = random.uniform(8, 15)
             
-            # Random delay between reports (avoid rate limiting)
+            # Progress indicator
+            if (i + 1) % 10 == 0:
+                rate = (self.success / (i + 1)) * 100
+                print(f"{BLUE}  → Progress: {i+1}/{count} | Success rate: {rate:.0f}%{RESET}")
+            
             if i < count - 1:
-                delay = random.uniform(delay_min, delay_max)
-                print(f"{BLUE}  → Waiting {delay:.1f}s{RESET}")
+                print(f"{BLUE}  → Waiting {delay:.0f}s{RESET}")
                 time.sleep(delay)
         
+        # Final summary
         print(f"\n{GREEN}════════════════════════════════════════{RESET}")
         print(f"{GREEN}[✓] COMPLETED{RESET}")
         print(f"{GREEN}[✓] Successful: {self.success}{RESET}")
         print(f"{RED}[✗] Failed: {self.failed}{RESET}")
-        print(f"{CYAN}[ℹ] Success Rate: {(self.success/(self.success+self.failed)*100) if (self.success+self.failed) > 0 else 0:.1f}%{RESET}")
+        total = self.success + self.failed
+        if total > 0:
+            rate = (self.success / total) * 100
+            print(f"{CYAN}[ℹ] Success Rate: {rate:.1f}%{RESET}")
         print(f"{GREEN}════════════════════════════════════════{RESET}")
 
 def main():
     print(f"""
 {CYAN}╔══════════════════════════════════════════════════╗
-║     WhatsApp Channel Reporter Tool v1.0          ║
-║           Termux Edition - No Proxy/API          ║
+║     WhatsApp Channel Reporter - E3 HACKER       ║
+║           ONLY LINK REQUIRED- Termux Ready          ║
 ╚══════════════════════════════════════════════════╝{RESET}
     """)
     
-    # Get channel link from user
-    channel_link = input(f"{WHITE}[?] Enter WhatsApp channel link: {RESET}").strip()
+    # Disable SSL warnings
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
-    if not channel_link:
-        print(f"{RED}[!] Channel link required!{RESET}")
+    reporter = FixedChannelReporter()
+    
+    # Get channel input
+    channel_input = input(f"{WHITE}[?] Enter channel link or ID: {RESET}").strip()
+    if not channel_input:
+        print(f"{RED}[!] Channel required{RESET}")
         return
     
-    # Extract channel ID
-    reporter = WhatsAppChannelReporter()
-    channel_id = reporter.extract_channel_id(channel_link)
+    channel_id = reporter.extract_channel_id(channel_input)
+    print(f"{GREEN}[✓] Target: {channel_id}{RESET}")
     
-    print(f"{GREEN}[✓] Channel ID extracted: {channel_id}{RESET}")
-    
-    # Get number of reports
+    # Get report count
     try:
-        report_count = int(input(f"{WHITE}[?] Number of reports to send (1-1000): {RESET}"))
-        if report_count < 1:
-            report_count = 10
-        if report_count > 1000:
-            print(f"{YELLOW}[!] Limiting to 1000 reports{RESET}")
-            report_count = 1000
+        count = int(input(f"{WHITE}[?] Number of reports (1-200): {RESET}") or "20")
+        count = max(1, min(200, count))
     except:
-        report_count = 10
-        print(f"{YELLOW}[!] Using default: {report_count} reports{RESET}")
+        count = 20
     
-    # Get delay range
-    try:
-        min_delay = float(input(f"{WHITE}[?] Minimum delay between reports (seconds, 1-10): {RESET}") or "2")
-        max_delay = float(input(f"{WHITE}[?] Maximum delay between reports (seconds, 2-15): {RESET}") or "5")
-        min_delay = max(1, min(10, min_delay))
-        max_delay = max(min_delay, min(15, max_delay))
-    except:
-        min_delay, max_delay = 2, 5
-        print(f"{YELLOW}[!] Using default delay: {min_delay}-{max_delay}s{RESET}")
-    
-    print(f"\n{YELLOW}[!] WARNING: This will send {report_count} reports to channel{RESET}")
+    print(f"\n{YELLOW}[!] This will send {count} reports to channel{RESET}")
     confirm = input(f"{WHITE}[?] Continue? (y/n): {RESET}").lower()
     
-    if confirm != 'y':
-        print(f"{RED}[!] Aborted{RESET}")
-        return
-    
-    # Execute reporting
-    reporter.bulk_report(channel_id, report_count, min_delay, max_delay)
-    
-    print(f"\n{CYAN}[ℹ] Tool execution complete{RESET}")
+    if confirm == 'y':
+        reporter.bulk_report(channel_id, count)
+    else:
+        print(f"{RED}[!] Cancelled{RESET}")
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n{RED}[!] Interrupted by user{RESET}")
+        print(f"\n{RED}[!] Interrupted{RESET}")
     except Exception as e:
         print(f"{RED}[!] Error: {e}{RESET}")
